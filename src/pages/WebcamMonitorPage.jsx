@@ -5,6 +5,7 @@ import { createSocket } from '../lib/socket.js';
 import { fetchDrivers, fetchRoutes, fetchBuses, startTrip, stopTrip, postSafetyEvent } from '../lib/api.js';
 import { useGPS } from '../hooks/useGPS.js';
 import { useHarshBraking } from '../hooks/useHarshBraking.js';
+import { useSpeedLimit } from '../hooks/useSpeedLimit.js';
 
 const DEFAULT_INFERENCE_INTERVAL_MS = 500;
 const DEFAULT_CAPTURE_QUALITY       = 0.75;
@@ -288,12 +289,25 @@ export default function WebcamMonitorPage() {
     }
   }, []);
 
-  // ── GPS tracking — active only during an active trip ──────────────────────
+  // ── GPS tracking (phase 1: start with env default limit) ─────────────────
+  // speedLimit prop is updated each render via ref inside the hook — no restart.
+  const [effectiveSpeedLimit, setEffectiveSpeedLimit] = useState(speedLimit);
+
   const gps = useGPS({
-    enabled:    !!activeTrip,
-    speedLimit,
+    enabled:     !!activeTrip,
+    speedLimit:  effectiveSpeedLimit,
     onViolation: handleSensorViolation,
   });
+
+  // ── Auto-detect road speed limit from OpenStreetMap ───────────────────────
+  const { speedLimit: detectedLimit, detecting: detectingLimit } = useSpeedLimit(
+    activeTrip ? gps.location : null
+  );
+
+  // When Overpass returns a limit, promote it to the effective limit.
+  useEffect(() => {
+    if (detectedLimit != null) setEffectiveSpeedLimit(detectedLimit);
+  }, [detectedLimit]);
 
   // ── Harsh braking — active only during an active trip ────────────────────
   const braking = useHarshBraking({
@@ -477,7 +491,9 @@ export default function WebcamMonitorPage() {
           motionPermissionNeeded={braking.permissionNeeded}
           onRequestMotionPermission={braking.requestIOSPermission}
           lastSafetyEvent={lastSafetyEvent}
-          speedLimit={speedLimit}
+          speedLimit={effectiveSpeedLimit}
+          detectedLimit={detectedLimit}
+          detectingLimit={detectingLimit}
         />
 
       </div>

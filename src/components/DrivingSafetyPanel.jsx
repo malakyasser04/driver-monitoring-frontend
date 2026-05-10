@@ -1,8 +1,8 @@
-function LabelValue({ label, value, highlight }) {
+function LabelValue({ label, value, highlight, dim }) {
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="text-sm text-gray-400">{label}</div>
-      <div className={`text-sm font-medium ${highlight ? 'text-red-400' : ''}`}>{value}</div>
+      <div className={`text-sm font-medium ${highlight ? 'text-red-400' : dim ? 'text-gray-500' : ''}`}>{value}</div>
     </div>
   );
 }
@@ -22,23 +22,31 @@ export default function DrivingSafetyPanel({
   motionPermissionNeeded,
   onRequestMotionPermission,
   lastSafetyEvent,
-  speedLimit,
+  speedLimit,        // effective limit used for violation checking (detected or fallback)
+  detectedLimit,     // raw value from Overpass (null = not yet detected)
+  detectingLimit,    // true while Overpass query is in-flight
 }) {
-  const speedText   = gpsSpeed != null ? `${gpsSpeed} km/h` : '—';
-  const isSpeeding  = gpsSpeed != null && gpsSpeed > speedLimit;
+  const effectiveLimit = detectedLimit ?? speedLimit;
+  const isSpeeding     = gpsSpeed != null && gpsSpeed > effectiveLimit;
+
+  const speedText = gpsSpeed != null ? `${gpsSpeed} km/h` : '—';
+
   const speedStatus = isSpeeding
-    ? `Speeding! (limit ${speedLimit} km/h)`
+    ? `Speeding!`
     : gpsSpeed != null
     ? 'OK'
     : '—';
 
-  const gpsStatusText = gpsActive
-    ? 'Active'
-    : gpsError || 'Inactive';
+  const limitText = detectedLimit != null
+    ? `${detectedLimit} km/h`
+    : detectingLimit
+    ? 'Detecting…'
+    : speedLimit
+    ? `${speedLimit} km/h (default)`
+    : '—';
 
-  const motionStatusText = motionActive
-    ? 'Active'
-    : motionError || 'Inactive';
+  const gpsStatusText    = gpsActive  ? 'Active' : gpsError  || 'Inactive';
+  const motionStatusText = motionActive ? 'Active' : motionError || 'Inactive';
 
   const lastEventText = lastSafetyEvent
     ? `${lastSafetyEvent.type === 'speed_violation' ? 'Speed violation' : 'Harsh braking'} — ${new Date(lastSafetyEvent.timestamp).toLocaleTimeString()}`
@@ -51,15 +59,28 @@ export default function DrivingSafetyPanel({
       </div>
 
       <div className="grid grid-cols-1 gap-y-2 sm:grid-cols-2">
-        <div>
-          <LabelValue label="GPS" value={gpsStatusText} />
-        </div>
-        <div>
-          <LabelValue label="Speed" value={speedText} highlight={isSpeeding} />
-        </div>
-        <div>
-          <LabelValue label="Speed Status" value={speedStatus} highlight={isSpeeding} />
-        </div>
+        <LabelValue label="GPS" value={gpsStatusText} />
+
+        <LabelValue
+          label="Speed"
+          value={speedText}
+          highlight={isSpeeding}
+          dim={gpsSpeed == null}
+        />
+
+        <LabelValue
+          label="Speed Limit"
+          value={limitText}
+          dim={detectedLimit == null}
+        />
+
+        <LabelValue
+          label="Speed Status"
+          value={isSpeeding ? `Speeding! (limit ${effectiveLimit} km/h)` : speedStatus}
+          highlight={isSpeeding}
+          dim={gpsSpeed == null}
+        />
+
         <div>
           {motionPermissionNeeded ? (
             <div className="flex items-center justify-between gap-4">
