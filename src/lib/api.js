@@ -18,3 +18,10 @@ export const startTrip = ({ driverId, routeId, busId }) =>
 
 export const stopTrip = (tripId) =>
   fetch(`${BACKEND}/api/trips/stop/${tripId}`, { method: 'POST' }).then(json);
+
+export const postSafetyEvent = ({ type, driverId, routeId, busId, tripId, speed, speedLimit, location }) =>
+  fetch(`${BACKEND}/api/safety-events`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, driverId, routeId, busId, tripId, speed, speedLimit, location }),
+  }).then(json);

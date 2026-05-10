@@ -1,23 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import StatusPanel from '../components/StatusPanel.jsx';
+import DrivingSafetyPanel from '../components/DrivingSafetyPanel.jsx';
 import { createSocket } from '../lib/socket.js';
-import { fetchDrivers, fetchRoutes, fetchBuses, startTrip, stopTrip } from '../lib/api.js';
+import { fetchDrivers, fetchRoutes, fetchBuses, startTrip, stopTrip, postSafetyEvent } from '../lib/api.js';
+import { useGPS } from '../hooks/useGPS.js';
+import { useHarshBraking } from '../hooks/useHarshBraking.js';
 
 const DEFAULT_INFERENCE_INTERVAL_MS = 500;
 const DEFAULT_CAPTURE_QUALITY       = 0.75;
 const DEFAULT_CAPTURE_MAX_EDGE      = 960;
+const DEFAULT_SPEED_LIMIT_KMH       = 80;
 
 export default function WebcamMonitorPage() {
-  const backendUrl         = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
+  const backendUrl          = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
   const inferenceIntervalMs = Number(import.meta.env.VITE_INFERENCE_INTERVAL_MS || DEFAULT_INFERENCE_INTERVAL_MS);
-  const captureQuality     = Number(import.meta.env.VITE_CAPTURE_QUALITY || DEFAULT_CAPTURE_QUALITY);
-  const captureMaxEdge     = Number(import.meta.env.VITE_CAPTURE_MAX_EDGE || DEFAULT_CAPTURE_MAX_EDGE);
+  const captureQuality      = Number(import.meta.env.VITE_CAPTURE_QUALITY || DEFAULT_CAPTURE_QUALITY);
+  const captureMaxEdge      = Number(import.meta.env.VITE_CAPTURE_MAX_EDGE || DEFAULT_CAPTURE_MAX_EDGE);
+  const speedLimit          = Number(import.meta.env.VITE_SPEED_LIMIT_KMH  || DEFAULT_SPEED_LIMIT_KMH);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const videoRef   = useRef(null);
   const canvasRef  = useRef(null);
   const socketRef  = useRef(null);
   const sendingRef = useRef(false);
+
+  // Stable ref to the active trip so sensor callbacks always see the latest value.
+  const activeTripRef = useRef(null);
 
   // ── Connection & Camera state ─────────────────────────────────────────────
   const [backendConnected, setBackendConnected] = useState(false);
@@ -32,6 +40,9 @@ export default function WebcamMonitorPage() {
   const [steering,  setSteering]  = useState({ label: 'hands_on_wheel', confidence: null });
   const [lastEvent, setLastEvent] = useState(null);
 
+  // ── Driving safety state ──────────────────────────────────────────────────
+  const [lastSafetyEvent, setLastSafetyEvent] = useState(null);
+
   // ── Dropdown data ─────────────────────────────────────────────────────────
   const [drivers, setDrivers] = useState([]);
   const [routes,  setRoutes]  = useState([]);
@@ -43,9 +54,12 @@ export default function WebcamMonitorPage() {
   const [selectedBus,    setSelectedBus]    = useState('');
 
   // ── Active trip state ─────────────────────────────────────────────────────
-  const [activeTrip,    setActiveTrip]    = useState(null);  // full trip object
-  const [tripLoading,   setTripLoading]   = useState(false);
-  const [tripError,     setTripError]     = useState(null);
+  const [activeTrip,  setActiveTrip]  = useState(null);
+  const [tripLoading, setTripLoading] = useState(false);
+  const [tripError,   setTripError]   = useState(null);
+
+  // Keep ref in sync so sensor callbacks don't capture stale closures.
+  useEffect(() => { activeTripRef.current = activeTrip; }, [activeTrip]);
 
   // ── Socket.IO ─────────────────────────────────────────────────────────────
   const socket = useMemo(() => createSocket(backendUrl), [backendUrl]);
@@ -69,6 +83,11 @@ export default function WebcamMonitorPage() {
 
     socket.on('eventSaved', (event) => {
       if (event?.timestamp) setLastEvent(event);
+    });
+
+    // Reflect safety events emitted by the backend to other clients.
+    socket.on('safetyEvent', (event) => {
+      if (event?.timestamp) setLastSafetyEvent(event);
     });
 
     return () => { socket.off(); socket.close(); };
@@ -244,6 +263,39 @@ export default function WebcamMonitorPage() {
     }
   }
 
+  // ── Sensor violation handler (shared by GPS + braking hooks) ─────────────
+  const handleSensorViolation = useCallback(async (payload) => {
+    const trip = activeTripRef.current;
+    try {
+      const result = await postSafetyEvent({
+        type:       payload.type,
+        speed:      payload.speed      ?? null,
+        speedLimit: payload.speedLimit ?? null,
+        location:   payload.location   ?? null,
+        driverId:   trip?.driver || null,
+        routeId:    trip?.route  || null,
+        busId:      trip?.bus    || null,
+        tripId:     trip?._id    || null,
+      });
+      if (result?.event) setLastSafetyEvent(result.event);
+    } catch {
+      // Best-effort: sensor events must not disrupt the main monitoring pipeline.
+    }
+  }, []);
+
+  // ── GPS tracking — active only during an active trip ──────────────────────
+  const gps = useGPS({
+    enabled:    !!activeTrip,
+    speedLimit,
+    onViolation: handleSensorViolation,
+  });
+
+  // ── Harsh braking — active only during an active trip ────────────────────
+  const braking = useHarshBraking({
+    enabled:    !!activeTrip,
+    onViolation: handleSensorViolation,
+  });
+
   // ── Derived display info ──────────────────────────────────────────────────
   const activeDriverName = drivers.find((d) => d._id === selectedDriver)?.name || '—';
   const activeRouteName  = routes.find((r)  => r._id === selectedRoute)?.name  || '—';
@@ -374,7 +426,7 @@ export default function WebcamMonitorPage() {
           />
         </div>
 
-        {/* ── Detection Status Panel (unchanged props) ──────────────────── */}
+        {/* ── Detection Status Panel (unchanged) ───────────────────────── */}
         <StatusPanel
           backendConnected={backendConnected}
           aiReachable={aiReachable}
@@ -390,6 +442,19 @@ export default function WebcamMonitorPage() {
           steeringLabel={steering.label}
           steeringConfidence={steering.confidence}
           lastEvent={lastEvent}
+        />
+
+        {/* ── Driving Safety Panel (GPS + harsh braking) ───────────────── */}
+        <DrivingSafetyPanel
+          gpsSpeed={gps.speed}
+          gpsActive={gps.active}
+          gpsError={gps.error}
+          motionActive={braking.active}
+          motionError={braking.error}
+          motionPermissionNeeded={braking.permissionNeeded}
+          onRequestMotionPermission={braking.requestIOSPermission}
+          lastSafetyEvent={lastSafetyEvent}
+          speedLimit={speedLimit}
         />
 
       </div>
