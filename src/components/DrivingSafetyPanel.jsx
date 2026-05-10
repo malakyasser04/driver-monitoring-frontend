@@ -22,28 +22,32 @@ export default function DrivingSafetyPanel({
   motionPermissionNeeded,
   onRequestMotionPermission,
   lastSafetyEvent,
-  speedLimit,        // effective limit used for violation checking (detected or fallback)
+  speedLimit,        // effective limit used for violation checking
   detectedLimit,     // raw value from Overpass (null = not yet detected)
   detectingLimit,    // true while Overpass query is in-flight
+  limitSource,       // 'tagged' | 'road_type' | null
+  limitRoadType,     // OSM highway type when source === 'road_type'
 }) {
   const effectiveLimit = detectedLimit ?? speedLimit;
   const isSpeeding     = gpsSpeed != null && gpsSpeed > effectiveLimit;
 
   const speedText = gpsSpeed != null ? `${gpsSpeed} km/h` : '—';
 
-  const speedStatus = isSpeeding
-    ? `Speeding!`
-    : gpsSpeed != null
-    ? 'OK'
-    : '—';
+  const speedStatus = isSpeeding ? 'Speeding!' : gpsSpeed != null ? 'OK' : '—';
 
-  const limitText = detectedLimit != null
-    ? `${detectedLimit} km/h`
-    : detectingLimit
-    ? 'Detecting…'
-    : speedLimit
-    ? `${speedLimit} km/h (default)`
-    : '—';
+  let limitText;
+  if (detectingLimit) {
+    limitText = 'Detecting…';
+  } else if (detectedLimit != null) {
+    const tag = limitSource === 'road_type' && limitRoadType
+      ? ` (${limitRoadType.replace('_', ' ')})`
+      : limitSource === 'tagged' ? ' (signed)' : '';
+    limitText = `${detectedLimit} km/h${tag}`;
+  } else if (speedLimit) {
+    limitText = `${speedLimit} km/h (default)`;
+  } else {
+    limitText = '—';
+  }
 
   const gpsStatusText    = gpsActive  ? 'Active' : gpsError  || 'Inactive';
   const motionStatusText = motionActive ? 'Active' : motionError || 'Inactive';

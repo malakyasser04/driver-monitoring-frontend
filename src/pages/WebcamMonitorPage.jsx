@@ -300,7 +300,7 @@ export default function WebcamMonitorPage() {
   });
 
   // ── Auto-detect road speed limit from OpenStreetMap ───────────────────────
-  const { speedLimit: detectedLimit, detecting: detectingLimit } = useSpeedLimit(
+  const { speedLimit: detectedLimit, detecting: detectingLimit, source: limitSource, roadType: limitRoadType } = useSpeedLimit(
     activeTrip ? gps.location : null
   );
 
@@ -494,6 +494,8 @@ export default function WebcamMonitorPage() {
           speedLimit={effectiveSpeedLimit}
           detectedLimit={detectedLimit}
           detectingLimit={detectingLimit}
+          limitSource={limitSource}
+          limitRoadType={limitRoadType}
         />
 
       </div>
